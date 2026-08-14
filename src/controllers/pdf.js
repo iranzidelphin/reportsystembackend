@@ -23,9 +23,9 @@ function startPdf(res, filename, title, req) {
 
 function summary(doc, items) {
   const y = 146
-  const width = 160
+  const width = 96
   items.forEach(([label, value], index) => {
-    const x = 36 + (index * (width + 12))
+    const x = 36 + (index * (width + 10))
     doc.roundedRect(x, y, width, 54, 6).fillAndStroke('#f6f8fb', '#e2e8f0')
     doc.fillColor('#718096').fontSize(8).text(label.toUpperCase(), x + 12, y + 11)
     doc.fillColor('#17233a').fontSize(14).text(value, x + 12, y + 28, { width: width - 24 })
@@ -72,9 +72,11 @@ exports.salesPdf = asyncHandler(async (req, res) => {
   const transactions = await Transaction.find(query).populate('staff', 'name fullName phoneNumber').sort({ transactionDate: -1 })
   const totalPaid = transactions.reduce((sum, item) => sum + item.paidAmount, 0)
   const totalRest = transactions.reduce((sum, item) => sum + item.remainingAmount, 0)
+  const totalCash = transactions.reduce((sum, item) => sum + (item.paymentMethod === 'CASH' ? item.paidAmount : 0), 0)
+  const totalMomo = transactions.reduce((sum, item) => sum + (item.paymentMethod === 'MOMO' ? item.paidAmount : 0), 0)
   const doc = startPdf(res, 'sales-report.pdf', 'Sales report', req)
 
-  summary(doc, [['Money earned', money(totalPaid)], ['Amount rest', money(totalRest)], ['Records', transactions.length]])
+  summary(doc, [['Money earned', money(totalPaid)], ['Amount rest', money(totalRest)], ['Cash received', money(totalCash)], ['MoMo Pay received', money(totalMomo)], ['Records', transactions.length]])
   drawTable(doc, [
     { key: 'date', label: 'Date', x: 44, width: 58 },
     { key: 'user', label: 'User', x: 108, width: 76 },
