@@ -71,25 +71,31 @@ exports.salesPdf = asyncHandler(async (req, res) => {
   const query = shopScope(req, dateFilter(req.query))
   const transactions = await Transaction.find(query).populate('staff', 'name fullName phoneNumber').sort({ transactionDate: -1 })
   const totalPaid = transactions.reduce((sum, item) => sum + item.paidAmount, 0)
+  const totalCashOut = transactions.reduce((sum, item) => sum + Number(item.cashOut || 0), 0)
+  const totalCashIn = transactions.reduce((sum, item) => sum + (Number(item.paidAmount || 0) - Number(item.cashOut || 0)), 0)
   const totalRest = transactions.reduce((sum, item) => sum + item.remainingAmount, 0)
   const totalCash = transactions.reduce((sum, item) => sum + (item.paymentMethod === 'CASH' ? item.paidAmount : 0), 0)
   const totalMomo = transactions.reduce((sum, item) => sum + (item.paymentMethod === 'MOMO' ? item.paidAmount : 0), 0)
   const doc = startPdf(res, 'sales-report.pdf', 'Sales report', req)
 
-  summary(doc, [['Money earned', money(totalPaid)], ['Amount rest', money(totalRest)], ['Cash received', money(totalCash)], ['MoMo Pay received', money(totalMomo)], ['Records', transactions.length]])
+  summary(doc, [['Amount', money(totalPaid)], ['Cash out', money(totalCashOut)], ['Cash in', money(totalCashIn)], ['Amount rest', money(totalRest)], ['Records', transactions.length]])
   drawTable(doc, [
     { key: 'date', label: 'Date', x: 44, width: 58 },
-    { key: 'user', label: 'User', x: 108, width: 76 },
-    { key: 'product', label: 'Product name', x: 190, width: 104 },
-    { key: 'paid', label: 'Paid', x: 300, width: 58, align: 'right' },
-    { key: 'rest', label: 'Rest', x: 364, width: 58, align: 'right' },
-    { key: 'method', label: 'Method', x: 434, width: 50 },
-    { key: 'description', label: 'Description', x: 490, width: 60 },
+    { key: 'user', label: 'User', x: 106, width: 64 },
+    { key: 'product', label: 'Product name', x: 174, width: 82 },
+    { key: 'paid', label: 'Amount', x: 260, width: 52, align: 'right' },
+    { key: 'cashOut', label: 'Cash out', x: 316, width: 52, align: 'right' },
+    { key: 'cashIn', label: 'Cash in', x: 372, width: 52, align: 'right' },
+    { key: 'rest', label: 'Rest', x: 428, width: 50, align: 'right' },
+    { key: 'method', label: 'Method', x: 484, width: 44 },
+    { key: 'description', label: 'Description', x: 532, width: 26 },
   ], transactions.map((item) => ({
     date: new Date(item.transactionDate || item.saleDate).toISOString().slice(0, 10),
     user: item.staff?.fullName || item.staff?.name || '-',
     product: item.serviceOrProduct || '-',
     paid: money(item.paidAmount),
+    cashOut: money(item.cashOut),
+    cashIn: money(Number(item.paidAmount || 0) - Number(item.cashOut || 0)),
     rest: money(item.remainingAmount),
     method: item.paymentMethod === 'MOMO' ? 'MoMo Pay' : 'Cash',
     description: item.notes || '-',

@@ -10,6 +10,8 @@ const schema = new Schema({
   unitPrice:{type:Number,required:true,min:0,default:0},
   totalAmount:{type:Number,required:true,min:0},
   paidAmount:{type:Number,required:true,min:0},
+  cashOut:{type:Number,required:true,min:0,default:0},
+  cashIn:{type:Number,required:true,default:0},
   remainingAmount:{type:Number,required:true,min:0},
   paymentMethod:{type:String,enum:['CASH','MOMO','CARD','BANK','OTHER'],default:'OTHER'},
   paymentStatus:{type:String,enum:['PAID','PARTIALLY_PAID','MONEY_NOT_PAID'],required:true},
@@ -27,6 +29,8 @@ schema.pre('validate',function(){
   if(!this.transactionDate&&this.saleDate)this.transactionDate=this.saleDate
   if(!this.saleDate&&this.transactionDate)this.saleDate=this.transactionDate
   if(!this.staff&&this.createdBy)this.staff=this.createdBy
+  this.cashOut=Number(this.cashOut||0)
+  this.cashIn=Number(this.paidAmount||0)-this.cashOut
   if(!this.saleTime)this.saleTime=new Date(this.saleDate||this.transactionDate||Date.now()).toTimeString().slice(0,5)
   if(!this.saleId)this.saleId=`SALE-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`
 })
