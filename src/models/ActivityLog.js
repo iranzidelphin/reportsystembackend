@@ -1,1 +1,28 @@
-const {Schema,model}=require('mongoose'); module.exports=model('ActivityLog',new Schema({user:{type:Schema.Types.ObjectId,ref:'User'},action:{type:String,required:true},description:{type:String,required:true},timestamp:{type:Date,default:Date.now}},{timestamps:false}))
+const { Schema, model } = require('mongoose');
+
+module.exports = model(
+  'ActivityLog',
+  new Schema(
+    {
+      user: {
+        type: Schema.Types.ObjectId,
+        ref: 'User'
+      },
+      action: {
+        type: String,
+        required: true
+      },
+      description: {
+        type: String,
+        required: true
+      },
+      timestamp: {
+        type: Date,
+        default: Date.now
+      }
+    },
+    {
+      timestamps: false
+    }
+  )
+);

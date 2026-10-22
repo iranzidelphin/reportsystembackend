@@ -20,7 +20,7 @@ async function ensureDefaultAdmin() {
   const user = await User.findOneAndUpdate(
     { phoneNumber },
     { fullName: name, name, phoneNumber, pinHash, role: 'ADMIN', status: 'ACTIVE' },
-    { new: true, upsert: true, setDefaultsOnInsert: true },
+    { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true },
   )
   return user
 }

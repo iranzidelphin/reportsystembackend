@@ -1,4 +1,3 @@
-const dns = require('dns')
 const mongoose = require('mongoose')
 
 async function connectDb() {
@@ -8,12 +7,8 @@ async function connectDb() {
     throw new Error('Set MONGODB_URI or MONGO_URL in backend/.env')
   }
 
-  if (uri.startsWith('mongodb+srv://')) {
-    dns.setServers(['8.8.8.8', '1.1.1.1'])
-  }
-
   await mongoose.connect(uri, {
-    serverSelectionTimeoutMS: 15000,
+    serverSelectionTimeoutMS: 10000,
   })
   console.log('MongoDB connected successfully')
 }

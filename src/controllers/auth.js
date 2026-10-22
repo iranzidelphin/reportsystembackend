@@ -3,7 +3,6 @@ const jwt = require('jsonwebtoken')
 const { z } = require('zod')
 const User = require('../models/User')
 const { asyncHandler, log } = require('../utils')
-const { adminConfig, ensureDefaultAdmin } = require('../utils/defaultAdmin')
 
 const safe = (user) => ({
   id: user._id,
@@ -27,9 +26,6 @@ exports.login = asyncHandler(async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ success: false, message: 'Validation failed', errors: parsed.error.issues })
   }
-
-  const { phoneNumber } = adminConfig()
-  if (parsed.data.phoneNumber === phoneNumber) await ensureDefaultAdmin()
 
   const query = parsed.data.phoneNumber ? { phoneNumber: parsed.data.phoneNumber } : {}
   const users = await User.find(query).select('+pinHash')

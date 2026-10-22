@@ -9,10 +9,14 @@ const auth = require('./controllers/auth')
 const tx = require('./controllers/transactions')
 const core = require('./controllers/core')
 const pdf = require('./controllers/pdf')
+const products = require('./controllers/products')
+const branches = require('./controllers/branches')
+const offlineSync = require('./controllers/offlineSync')
 const { protect, allow } = require('./middleware/auth')
 const error = require('./middleware/error')
 
 const app = express()
+const isDevelopment = process.env.NODE_ENV !== 'production'
 const clientUrls = (process.env.CLIENT_URL || 'http://localhost:5173')
   .split(',')
   .map((url) => url.trim().replace(/\/+$/, ''))
@@ -22,15 +26,29 @@ app.use(helmet())
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || clientUrls.includes(origin.replace(/\/+$/, ''))) return callback(null, true)
-    return callback(new Error('Not allowed by CORS'))
+
+    // Vite may choose a different port when its default port is already busy.
+    if (isDevelopment) {
+      try {
+        const { hostname, protocol } = new URL(origin)
+        if (protocol === 'http:' && ['localhost', '127.0.0.1'].includes(hostname)) {
+          return callback(null, true)
+        }
+      } catch {
+        // Invalid Origin values are rejected below.
+      }
+    }
+
+    // A disallowed Origin should omit CORS headers without throwing a server error.
+    return callback(null, false)
   },
 }))
 app.use(express.json({ limit: '100kb' }))
 app.use(morgan('dev'))
 
-app.get('/', (req, res) => res.status(200).json({ status: 'ok', message: 'Shop Report API running' }))
+app.get('/', (req, res) => res.status(200).json({ status: 'ok', message: 'manageyourstock API running' }))
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }))
-app.get('/api/health', (req, res) => res.json({ success: true, message: 'Shop Report API running' }))
+app.get('/api/health', (req, res) => res.json({ success: true, message: 'manageyourstock API running' }))
 
 const loginLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -39,6 +57,13 @@ const loginLimit = rateLimit({
   legacyHeaders: false,
   message: { success: false, message: 'Too many login attempts. Please try later.' },
 })
+const syncLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, code: 'SYNC_RATE_LIMITED', message: 'Too many sync requests. Your queued records are safe; retry shortly.' },
+})
 
 function registerApiRoutes(prefix = '/api') {
   app.post(`${prefix}/auth/login`, loginLimit, auth.login)
@@ -46,10 +71,28 @@ function registerApiRoutes(prefix = '/api') {
   app.get(`${prefix}/auth/me`, protect, auth.me)
 
   app.get(`${prefix}/dashboard/summary`, protect, core.dashboard)
+  app.post(`${prefix}/sync/batch`, protect, allow('ADMIN', 'MANAGER', 'STAFF'), syncLimit, offlineSync.batch)
+
+  app.route(`${prefix}/branches`)
+    .get(protect, branches.list)
+    .post(protect, allow('ADMIN', 'MANAGER'), branches.create)
+  app.route(`${prefix}/branches/:id`)
+    .get(protect, branches.get)
+    .put(protect, allow('ADMIN', 'MANAGER'), branches.update)
+    .delete(protect, allow('ADMIN', 'MANAGER'), branches.remove)
+
+  app.route(`${prefix}/products`)
+    .get(protect, products.list)
+    .post(protect, allow('ADMIN', 'MANAGER'), products.create)
+  app.route(`${prefix}/products/:id`)
+    .get(protect, products.get)
+    .put(protect, allow('ADMIN', 'MANAGER'), products.update)
+    .delete(protect, allow('ADMIN', 'MANAGER'), products.remove)
 
   app.route(`${prefix}/transactions`)
     .get(protect, tx.list)
     .post(protect, allow('ADMIN', 'MANAGER', 'STAFF'), tx.create)
+  app.post(`${prefix}/transactions/batch`, protect, allow('ADMIN', 'MANAGER', 'STAFF'), tx.createBatch)
 
   app.route(`${prefix}/transactions/:id`)
     .get(protect, tx.get)

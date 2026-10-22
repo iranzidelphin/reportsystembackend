@@ -13,7 +13,7 @@ function startPdf(res, filename, title, req) {
   const doc = new PDFDocument({ margin: 36, size: 'A4' })
   doc.pipe(res)
   doc.rect(0, 0, doc.page.width, 86).fill('#101d31')
-  doc.fillColor('#ffffff').fontSize(18).text('SHOP REPORT SYSTEM', 36, 28)
+  doc.fillColor('#ffffff').fontSize(18).text('MANAGEYOURSTOCK', 36, 28)
   doc.fillColor('#9bb7e8').fontSize(10).text(title.toUpperCase(), 36, 52)
   doc.fillColor('#526175').fontSize(9)
   doc.text(`Period: ${req.query.fromDate || 'Beginning'} to ${req.query.toDate || 'Today'}`, 36, 104)

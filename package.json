@@ -1,12 +1,13 @@
 {
-  "name": "backend",
+  "name": "manageyourstock-backend",
   "version": "1.0.0",
   "description": "",
   "main": "src/server.js",
   "scripts": {
     "dev": "node --watch src/server.js",
-    "start": "node src/server.js",
-    "seed": "node src/seed.js"
+    "start": "nodemon src/server.js",
+    "seed": "node src/seed.js",
+    "migrate": "node src/migrations/001-products.js && node src/migrations/002-sync-receipts.js"
   },
   "keywords": [],
   "author": "",
@@ -22,7 +23,9 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.1",
     "morgan": "^1.11.0",
+    "nodemon": "^3.1.14",
     "pdfkit": "^0.19.1",
     "zod": "^4.4.3"
   }
 }
+
