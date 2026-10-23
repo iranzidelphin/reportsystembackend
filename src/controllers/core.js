@@ -22,7 +22,19 @@ exports.expenses={
  remove:asyncHandler(async(req,res)=>{const existing=await Expense.findOne({_id:req.params.id,});if(!existing)return res.status(404).json({success:false,message:'EXPENSE not found'});if(String(existing.createdBy)!==String(req.user._id))return res.status(403).json({success:false,message:'You can only delete expense rows you personally created.'});if(existing.productId&&!await reverseImport(existing.productId,existing.stockQuantity))return res.status(409).json({success:false,message:'This import cannot be reversed because some of its stock has already been sold or removed.'});try{await existing.deleteOne()}catch(error){if(existing.productId)await addImportedQuantity(existing.productId,existing.stockQuantity);throw error}res.json({success:true,message:'EXPENSE deleted'})})
 }
 const scope=(_req,q={})=>q
-exports.dashboard=asyncHandler(async(req,res)=>{const q=scope(req,dateFilter(req.query));const [t,lowStockProducts]=await Promise.all([Transaction.aggregate([{$match:q},{$group:{_id:null,totalPaid:{$sum:'$paidAmount'},totalCashOut:{$sum:{$ifNull:['$cashOut',0]}},totalCashIn:{$sum:{$subtract:['$paidAmount',{$ifNull:['$cashOut',0]}]}},totalRemaining:{$sum:'$remainingAmount'},transactionCount:{$sum:1}}}]),Product.find({$expr:{$lte:['$quantity','$lowStockLevel']},status:'ACTIVE'}).sort({quantity:1}).limit(10).select('name sku quantity lowStockLevel location')]);const s=t[0]||{};res.json({success:true,data:{paidAmount:s.totalPaid||0,totalPaid:s.totalPaid||0,totalAmount:s.totalPaid||0,totalCashOut:s.totalCashOut||0,totalCashIn:s.totalCashIn||0,totalMoneyEarned:s.totalCashIn||0,notPaid:s.totalRemaining||0,totalRemaining:s.totalRemaining||0,totalRemainingMoney:s.totalRemaining||0,transactionCount:s.transactionCount||0,lowStockProducts}})})
+exports.dashboard=asyncHandler(async(req,res)=>{
+ const isAdmin=['ADMIN','OWNER'].includes(req.user.role)
+ const q=dateFilter(req.query)
+ if(!isAdmin)q.$or=[{staff:req.user._id},{createdBy:req.user._id}]
+ const [t,lowStockProducts]=await Promise.all([
+  Transaction.aggregate([{$match:q},{$group:{_id:null,totalPaid:{$sum:'$paidAmount'},totalCashOut:{$sum:{$ifNull:['$cashOut',0]}},totalCashIn:{$sum:{$subtract:['$paidAmount',{$ifNull:['$cashOut',0]}]}},totalRemaining:{$sum:'$remainingAmount'},transactionCount:{$sum:1}}}]),
+  isAdmin?Product.find({$expr:{$lte:['$quantity','$lowStockLevel']},status:'ACTIVE'}).sort({quantity:1}).limit(10).select('name sku quantity lowStockLevel location'):Promise.resolve([]),
+ ])
+ const s=t[0]||{}
+ const data={paidAmount:s.totalPaid||0,totalPaid:s.totalPaid||0,totalAmount:s.totalPaid||0,totalCashOut:s.totalCashOut||0,totalCashIn:s.totalCashIn||0,totalMoneyEarned:s.totalCashIn||0,notPaid:s.totalRemaining||0,totalRemaining:s.totalRemaining||0,totalRemainingMoney:s.totalRemaining||0,transactionCount:s.transactionCount||0}
+ if(isAdmin)data.lowStockProducts=lowStockProducts
+ res.json({success:true,data})
+})
 exports.report=asyncHandler(async(req,res)=>{
   const q=scope(req,dateFilter(req.query))
   if(req.query.paymentMethod)q.paymentMethod=req.query.paymentMethod

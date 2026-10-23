@@ -108,6 +108,9 @@ exports.createBatch = asyncHandler(async (req, res) => {
 exports.list = asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, search, paymentMethod } = req.query
   const query = shopScope(req, { ...dateFilter(req.query) })
+  if (req.query.dashboard === 'true' && !['ADMIN', 'OWNER'].includes(req.user.role)) {
+    query.$or = [{ staff: req.user._id }, { createdBy: req.user._id }]
+  }
   if (paymentMethod) query.paymentMethod = paymentMethod
   if (search) query.$or = [{ serviceOrProduct: new RegExp(search, 'i') }, { productOrService: new RegExp(search, 'i') }, { notes: new RegExp(search, 'i') }]
   const [data, total] = await Promise.all([Transaction.find(query).sort({ transactionDate: -1, createdAt: -1 }).skip((page - 1) * limit).limit(Number(limit)).populate('staff', 'name fullName phoneNumber role').populate('productId', 'name sku category costPrice brand location unit description'), Transaction.countDocuments(query)])
