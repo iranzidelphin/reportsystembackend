@@ -14,9 +14,9 @@ const userSchema = new Schema({
     sparse:true},
   pinHash:{
     type:String,
-    required:true,
     select:false
   },
+  passwordHash:{type:String,select:false},
   role:{
     type:String,
     enum:['ADMIN','OWNER','MANAGER','CASHIER','STAFF'],

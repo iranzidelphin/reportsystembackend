@@ -1,7 +1,6 @@
 const mongoose = require('mongoose')
 const { z } = require('zod')
 const Product = require('../models/Product')
-const Branch = require('../models/Branch')
 const Transaction = require('../models/Transaction')
 const Expense = require('../models/Expense')
 const SyncReceipt = require('../models/SyncReceipt')
@@ -32,7 +31,6 @@ const operationRule = z.discriminatedUnion('kind', [
   z.object({ operationId: z.string().uuid(), kind: z.literal('import'), payload: importRule }),
 ])
 const withSession = (query, session) => session ? query.session(session) : query
-const branchActive = async (product, session) => !product.branchId || Boolean(await withSession(Branch.exists({ _id: product.branchId, status: 'ACTIVE' }), session))
 const stockSnapshot = async (productIds, session) => {
   const uniqueIds = [...new Set(productIds.filter((id) => mongoose.Types.ObjectId.isValid(id)).map(String))]
   const rows = await withSession(Product.find({ _id: { $in: uniqueIds } }).select('_id quantity location status'), session).lean()
@@ -65,8 +63,8 @@ async function applySale(session, operation, req) {
     const product = await Product.findById(item.productId).session(session)
     if (!product) return { status: 'error', retryable: false, message: 'A selected product no longer exists.', data: null, currentStock: await stockSnapshot([item.productId], session) }
     touchedProductIds.push(product._id)
-    if (product.status !== 'ACTIVE' || !await branchActive(product, session)) {
-      return { status: 'conflict', retryable: false, message: `${product.name} is inactive or its branch is inactive.`, data: null, currentStock: await stockSnapshot(touchedProductIds, session) }
+    if (product.status !== 'ACTIVE') {
+      return { status: 'conflict', retryable: false, message: `${product.name} is inactive.`, data: null, currentStock: await stockSnapshot(touchedProductIds, session) }
     }
     const updated = await Product.findOneAndUpdate(
       { _id: product._id, status: 'ACTIVE', quantity: { $gte: item.quantity } },
@@ -83,7 +81,6 @@ async function applySale(session, operation, req) {
       productId: product._id,
       productOrService: product.name,
       serviceOrProduct: product.name,
-      branchId: product.branchId || null,
       category: product.category || '',
       quantity: item.quantity,
       unitPrice: item.unitPrice,
@@ -106,11 +103,14 @@ async function applySale(session, operation, req) {
 }
 
 async function applyImport(session, operation, req) {
+  if (!['ADMIN', 'OWNER'].includes(req.user.role)) {
+    return { status: 'error', retryable: false, message: 'Only head office administrators can import or allocate stock.', data: null, currentStock: [] }
+  }
   const { payload } = operation
   const product = await Product.findById(payload.productId).session(session)
   if (!product) return { status: 'error', retryable: false, message: 'The selected product no longer exists.', data: null, currentStock: [] }
-  if (product.status !== 'ACTIVE' || !await branchActive(product, session)) {
-    return { status: 'conflict', retryable: false, message: 'The selected product or its branch is inactive.', data: null, currentStock: await stockSnapshot([product._id], session) }
+  if (product.status !== 'ACTIVE') {
+    return { status: 'conflict', retryable: false, message: 'The selected product is inactive.', data: null, currentStock: await stockSnapshot([product._id], session) }
   }
   const updated = await Product.findByIdAndUpdate(
     product._id,
@@ -122,7 +122,6 @@ async function applyImport(session, operation, req) {
     amount: payload.amount,
     paymentMethod: payload.paymentMethod,
     productId: product._id,
-    branchId: product.branchId || null,
     stockQuantity: payload.stockQuantity,
     expenseDate: payload.expenseDate,
     date: payload.expenseDate,

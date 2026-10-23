@@ -8,7 +8,6 @@ const schema = new Schema(
       trim: true
     },
     productId: { type: Schema.Types.ObjectId, ref: 'Product', default: null },
-    branchId: { type: Schema.Types.ObjectId, ref: 'Branch', index: true },
     stockQuantity: { type: Number, min: 0, default: 0 },
     amount: {
       type: Number,

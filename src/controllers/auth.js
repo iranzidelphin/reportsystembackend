@@ -19,8 +19,9 @@ const safe = (user) => ({
 
 exports.login = asyncHandler(async (req, res) => {
   const parsed = z.object({
-    phoneNumber: z.string().trim().optional(),
-    pin: z.string().regex(/^\d{4}$/, 'PIN must contain exactly 4 digits'),
+    phoneNumber: z.string().trim().min(7),
+    password: z.string().min(1).optional(),
+    pin: z.string().min(1).optional(),
   }).safeParse(req.body)
 
   if (!parsed.success) {
@@ -28,10 +29,12 @@ exports.login = asyncHandler(async (req, res) => {
   }
 
   const query = parsed.data.phoneNumber ? { phoneNumber: parsed.data.phoneNumber } : {}
-  const users = await User.find(query).select('+pinHash')
-  const user = users.find((item) => item.status === 'ACTIVE' && bcrypt.compareSync(parsed.data.pin, item.pinHash))
+  const credential = parsed.data.password || parsed.data.pin
+  if (!credential) return res.status(400).json({ success: false, message: 'Password is required.' })
+  const users = await User.find(query).select('+passwordHash +pinHash')
+  const user = users.find((item) => item.status === 'ACTIVE' && bcrypt.compareSync(credential, item.passwordHash || item.pinHash || ''))
 
-  if (!user) return res.status(401).json({ success: false, message: 'Invalid phone number or PIN.' })
+  if (!user) return res.status(401).json({ success: false, message: 'Invalid phone number or password.' })
 
   user.lastLogin = new Date()
   await user.save()

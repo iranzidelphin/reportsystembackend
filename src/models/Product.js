@@ -12,7 +12,6 @@ const schema = new Schema({
   quantity: { type: Number, required: true, min: 0, default: 0 },
   lowStockLevel: { type: Number, min: 0, default: 5 },
   location: { type: String, required: true, trim: true },
-  branchId: { type: Schema.Types.ObjectId, ref: 'Branch', index: true },
   supplier: { type: String, trim: true, default: '' },
   status: { type: String, enum: ['ACTIVE', 'INACTIVE'], default: 'ACTIVE' },
   notes: { type: String, trim: true, default: '' },

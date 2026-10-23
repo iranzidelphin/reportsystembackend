@@ -24,19 +24,18 @@ const batchRule = z.object({
   })).min(1).max(100),
 })
 
-const makeData = async (v) => {
+const makeData = async (v, req) => {
   let product = null
   if (v.productId) {
     product = await Product.findById(v.productId)
     if (!product || product.status !== 'ACTIVE') throw Object.assign(new Error('Select an active product'), { status: 400 })
-    if (product.branchId && !await require('../models/Branch').exists({ _id: product.branchId, status: 'ACTIVE' })) throw Object.assign(new Error('This product belongs to an inactive branch'), { status: 400 })
   }
   const name = product?.name || v.productName || v.productOrService || v.serviceOrProduct
   const unitPrice = v.unitPrice ?? product?.sellingPrice ?? (v.paidAmount + v.remainingAmount)
   const unitCost = product ? Number(product.costPrice || 0) : (v.quantity ? Number(v.cashOut || 0) / v.quantity : 0)
   const totalAmount = unitPrice * v.quantity
   const date = v.transactionDate || new Date()
-  return { customerName: v.customerName, productId: product?._id || null, branchId: product?.branchId || null, productOrService: name, serviceOrProduct: name,
+  return { customerName: v.customerName, productId: product?._id || null, productOrService: name, serviceOrProduct: name,
     category: product?.category || '', quantity: v.quantity, unitPrice, unitCost, totalAmount,
     paidAmount: v.paidAmount, cashOut: v.cashOut, cashIn: v.paidAmount - v.cashOut,
     remainingAmount: v.remainingAmount, paymentMethod: v.paymentMethod,
@@ -58,7 +57,7 @@ const ownsTransaction = (req, row) => String(row?.createdBy || row?.staff || '')
 exports.create = asyncHandler(async (req, res) => {
   const parsed = rule.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Validation failed', errors: parsed.error.issues })
-  const data = await makeData(parsed.data)
+  const data = await makeData(parsed.data, req)
   if (data.productId && !await adjustStock(data.productId, -data.quantity)) return res.status(409).json({ success: false, message: 'Not enough stock available for this sale' })
   let transaction
   try { transaction = await Transaction.create({ ...data, staff: req.user._id, createdBy: req.user._id }) } catch (error) {
@@ -80,7 +79,6 @@ exports.createBatch = asyncHandler(async (req, res) => {
     for (const item of items) {
       const product = await Product.findById(item.productId)
       if (!product || product.status !== 'ACTIVE') throw Object.assign(new Error('One or more selected products are unavailable'), { status: 400 })
-      if (product.branchId && !await require('../models/Branch').exists({ _id: product.branchId, status: 'ACTIVE' })) throw Object.assign(new Error(`${product.name} belongs to an inactive branch`), { status: 400 })
       const totalAmount = item.unitPrice * item.quantity
       const stock = await Product.findOneAndUpdate(
         { _id: product._id, status: 'ACTIVE', quantity: { $gte: item.quantity } },
@@ -92,7 +90,6 @@ exports.createBatch = asyncHandler(async (req, res) => {
       const costTotal = Number(product.costPrice || 0) * item.quantity
       const date = transactionDate || new Date()
       data.push({ customerName, productId: product._id, productOrService: product.name, serviceOrProduct: product.name,
-        branchId: product.branchId || null,
         category: product.category || '', quantity: item.quantity, unitPrice: item.unitPrice, unitCost: Number(product.costPrice || 0), totalAmount,
         paidAmount: totalAmount, cashOut: costTotal, cashIn: totalAmount - costTotal,
         remainingAmount: 0, paymentMethod, paymentStatus: statusFor(totalAmount, totalAmount),
@@ -111,10 +108,9 @@ exports.createBatch = asyncHandler(async (req, res) => {
 exports.list = asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, search, paymentMethod } = req.query
   const query = shopScope(req, { ...dateFilter(req.query) })
-  if (req.query.branchId) query.branchId = req.query.branchId
   if (paymentMethod) query.paymentMethod = paymentMethod
   if (search) query.$or = [{ serviceOrProduct: new RegExp(search, 'i') }, { productOrService: new RegExp(search, 'i') }, { notes: new RegExp(search, 'i') }]
-  const [data, total] = await Promise.all([Transaction.find(query).sort({ transactionDate: -1, createdAt: -1 }).skip((page - 1) * limit).limit(Number(limit)).populate('staff', 'name fullName phoneNumber role').populate('branchId', 'name').populate({ path: 'productId', select: 'name sku category costPrice brand location unit description branchId', populate: { path: 'branchId', select: 'name' } }), Transaction.countDocuments(query)])
+  const [data, total] = await Promise.all([Transaction.find(query).sort({ transactionDate: -1, createdAt: -1 }).skip((page - 1) * limit).limit(Number(limit)).populate('staff', 'name fullName phoneNumber role').populate('productId', 'name sku category costPrice brand location unit description'), Transaction.countDocuments(query)])
   res.json({ success: true, data, meta: { page: Number(page), limit: Number(limit), total, pages: Math.ceil(total / limit) } })
 })
 exports.get = asyncHandler(async (req, res) => {
@@ -125,10 +121,10 @@ exports.get = asyncHandler(async (req, res) => {
 exports.update = asyncHandler(async (req, res) => {
   const parsed = rule.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Validation failed', errors: parsed.error.issues })
-  const existing = await Transaction.findOne(shopScope(req, { _id: req.params.id, ...(req.query.branchId ? { branchId: req.query.branchId } : {}) }))
+  const existing = await Transaction.findOne(shopScope(req, { _id: req.params.id }))
   if (!existing) return res.status(404).json({ success: false, message: 'Transaction not found' })
   if (!ownsTransaction(req, existing)) return res.status(403).json({ success: false, message: 'You can only edit rows you personally created.' })
-  const data = await makeData(parsed.data)
+  const data = await makeData(parsed.data, req)
   if (existing.productId) await adjustStock(existing.productId, existing.quantity)
   if (data.productId && !await adjustStock(data.productId, -data.quantity)) {
     if (existing.productId) await adjustStock(existing.productId, -existing.quantity)
@@ -145,7 +141,7 @@ exports.update = asyncHandler(async (req, res) => {
   }
 })
 exports.remove = asyncHandler(async (req, res) => {
-  const existing = await Transaction.findOne(shopScope(req, { _id: req.params.id, ...(req.query.branchId ? { branchId: req.query.branchId } : {}) }))
+  const existing = await Transaction.findOne(shopScope(req, { _id: req.params.id }))
   if (!existing) return res.status(404).json({ success: false, message: 'Transaction not found' })
   if (!ownsTransaction(req, existing)) return res.status(403).json({ success: false, message: 'You can only delete rows you personally created.' })
   await Transaction.findByIdAndDelete(existing._id)

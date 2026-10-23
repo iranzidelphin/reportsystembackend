@@ -4,7 +4,7 @@ const Expense = require('../models/Expense')
 const { asyncHandler, dateFilter, log } = require('../utils')
 
 const money = (value) => `${Number(value || 0).toLocaleString()} RWF`
-const shopScope = (req, query = {}) => query
+const shopScope = (_req, query = {}) => query
 
 function startPdf(res, filename, title, req) {
   res.setHeader('Content-Type', 'application/pdf')
@@ -69,6 +69,11 @@ function drawTable(doc, columns, rows, startY = 226) {
 
 exports.salesPdf = asyncHandler(async (req, res) => {
   const query = shopScope(req, dateFilter(req.query))
+  if (req.query.userId) {
+    if (!['ADMIN', 'OWNER'].includes(req.user.role)) return res.status(403).json({ success: false, message: 'Only administrators can filter sales by user.' })
+    if (!/^[a-f\d]{24}$/i.test(req.query.userId)) return res.status(400).json({ success: false, message: 'Invalid user ID.' })
+    query.$or = [{ staff: req.query.userId }, { createdBy: req.query.userId }]
+  }
   const transactions = await Transaction.find(query).populate('staff', 'name fullName phoneNumber').sort({ transactionDate: -1 })
   const totalPaid = transactions.reduce((sum, item) => sum + item.paidAmount, 0)
   const totalCashOut = transactions.reduce((sum, item) => sum + Number(item.cashOut || 0), 0)

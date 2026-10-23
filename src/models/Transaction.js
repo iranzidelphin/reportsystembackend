@@ -6,7 +6,6 @@ const schema = new Schema({
   productOrService:{type:String,trim:true},
   serviceOrProduct:{type:String,required:true,trim:true},
   productId:{type:Schema.Types.ObjectId,ref:'Product',default:null},
-  branchId:{type:Schema.Types.ObjectId,ref:'Branch',index:true},
   category:{type:String,trim:true,default:''},
   quantity:{type:Number,required:true,min:1,default:1},
   unitPrice:{type:Number,required:true,min:0,default:0},
