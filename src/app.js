@@ -68,6 +68,7 @@ function registerApiRoutes(prefix = '/api') {
   app.post(`${prefix}/auth/login`, loginLimit, auth.login)
   app.post(`${prefix}/auth/logout`, protect, auth.logout)
   app.get(`${prefix}/auth/me`, protect, auth.me)
+  app.post(`${prefix}/auth/change-password`, protect, auth.changePassword)
 
   app.get(`${prefix}/dashboard/summary`, protect, core.dashboard)
   app.post(`${prefix}/sync/batch`, protect, allow('ADMIN', 'MANAGER', 'STAFF'), syncLimit, offlineSync.batch)

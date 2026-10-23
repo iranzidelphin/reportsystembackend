@@ -48,6 +48,39 @@ exports.login = asyncHandler(async (req, res) => {
 
 exports.me = asyncHandler(async (req, res) => res.json({ success: true, data: safe(req.user) }))
 
+exports.changePassword = asyncHandler(async (req, res) => {
+  const parsed = z.object({
+    currentPassword: z.string().min(1),
+    newPassword: z.string().min(8).max(128),
+    confirmPassword: z.string().min(8).max(128),
+  }).refine((values) => values.newPassword === values.confirmPassword, {
+    message: 'New passwords do not match.',
+    path: ['confirmPassword'],
+  }).safeParse(req.body)
+
+  if (!parsed.success) {
+    const mismatch = parsed.error.issues.some((issue) => issue.path.includes('confirmPassword'))
+    return res.status(400).json({
+      success: false,
+      message: mismatch ? 'New passwords do not match.' : 'Enter your current password and a new password of 8 to 128 characters.',
+      errors: parsed.error.issues,
+    })
+  }
+
+  const user = await User.findById(req.user._id).select('+passwordHash +pinHash')
+  const storedHash = user?.passwordHash || user?.pinHash
+  if (!user || !storedHash || !await bcrypt.compare(parsed.data.currentPassword, storedHash)) {
+    return res.status(400).json({ success: false, message: 'Current password is incorrect.' })
+  }
+
+  user.passwordHash = await bcrypt.hash(parsed.data.newPassword, 12)
+  user.pinHash = undefined
+  await user.save()
+  await log(user, 'CHANGE_PASSWORD', 'Updated account password')
+
+  res.json({ success: true, message: 'Password updated successfully.' })
+})
+
 exports.logout = asyncHandler(async (req, res) => {
   await log(req.user, 'LOGOUT', `${req.user.name} logged out`)
   res.json({ success: true, message: 'Logged out' })
