@@ -106,6 +106,9 @@ exports.update = asyncHandler(async (req, res) => {
   const parsed = rule.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Validation failed', errors: parsed.error.issues })
   try {
+    const existing = await Product.findById(req.params.id)
+    if (!existing) return res.status(404).json({ success: false, message: 'Product not found' })
+    if (existing.quantity !== parsed.data.quantity) return res.status(409).json({ success: false, message: 'Stock quantity cannot be changed from product editing. Use a stock import or adjustment workflow.' })
     const update = { $set: { ...parsed.data, lastUpdatedBy: req.user._id } }
     if (!parsed.data.sku) {
       delete update.$set.sku

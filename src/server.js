@@ -2,8 +2,10 @@ const app = require('./app')
 const connectDb = require('./config/db')
 const { ensureDefaultAdmin } = require('./utils/defaultAdmin')
 const { startKeepAlive } = require('./utils/keepAlive')
+const { validateSecurityConfig } = require('./config/security')
 
 const port = process.env.PORT || 5000
+validateSecurityConfig()
 
 connectDb()
   .then(async () => {

@@ -4,7 +4,8 @@ const Expense = require('../models/Expense')
 const { asyncHandler, dateFilter, log } = require('../utils')
 
 const money = (value) => `${Number(value || 0).toLocaleString()} RWF`
-const shopScope = (_req, query = {}) => query
+const shopScope = (req, query = {}) => ['ADMIN', 'OWNER'].includes(req.user.role) ? query : { ...query, $or: [{ staff: req.user._id }, { createdBy: req.user._id }] }
+const expenseScope = (req, query = {}) => ['ADMIN', 'OWNER'].includes(req.user.role) ? query : { ...query, createdBy: req.user._id }
 
 function startPdf(res, filename, title, req) {
   res.setHeader('Content-Type', 'application/pdf')
@@ -74,7 +75,7 @@ exports.salesPdf = asyncHandler(async (req, res) => {
     if (!/^[a-f\d]{24}$/i.test(req.query.userId)) return res.status(400).json({ success: false, message: 'Invalid user ID.' })
     query.$or = [{ staff: req.query.userId }, { createdBy: req.query.userId }]
   }
-  const transactions = await Transaction.find(query).populate('staff', 'name fullName phoneNumber').sort({ transactionDate: -1 })
+  const transactions = await Transaction.find(query).populate('staff', 'name fullName phoneNumber').sort({ transactionDate: -1 }).limit(1000)
   const totalPaid = transactions.reduce((sum, item) => sum + item.paidAmount, 0)
   const totalCashOut = transactions.reduce((sum, item) => sum + Number(item.cashOut || 0), 0)
   const totalCashIn = transactions.reduce((sum, item) => sum + (Number(item.paidAmount || 0) - Number(item.cashOut || 0)), 0)
@@ -111,8 +112,8 @@ exports.salesPdf = asyncHandler(async (req, res) => {
 })
 
 exports.stockPdf = asyncHandler(async (req, res) => {
-  const query = dateFilter(req.query, 'expenseDate')
-  const rows = await Expense.find(query).populate('createdBy', 'name fullName phoneNumber').sort({ expenseDate: -1 })
+  const query = expenseScope(req, dateFilter(req.query, 'expenseDate'))
+  const rows = await Expense.find(query).populate('createdBy', 'name fullName phoneNumber').sort({ expenseDate: -1 }).limit(1000)
   const total = rows.reduce((sum, item) => sum + item.amount, 0)
   const doc = startPdf(res, 'Imported-stock-report.pdf', 'Imported stock report', req)
 

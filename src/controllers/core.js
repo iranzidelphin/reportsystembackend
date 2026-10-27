@@ -1,4 +1,4 @@
-const {z}=require('zod'),Service=require('../models/Service'),Expense=require('../models/Expense'),Product=require('../models/Product'),Transaction=require('../models/Transaction'),User=require('../models/User'),ActivityLog=require('../models/ActivityLog'),{asyncHandler,log,dateFilter}=require('../utils'),{ensureDefaultAdmin,isDefaultAdmin}=require('../utils/defaultAdmin')
+const {z}=require('zod'),mongoose=require('mongoose'),Service=require('../models/Service'),Expense=require('../models/Expense'),Product=require('../models/Product'),Transaction=require('../models/Transaction'),User=require('../models/User'),ActivityLog=require('../models/ActivityLog'),{asyncHandler,log,dateFilter}=require('../utils'),{ensureDefaultAdmin,isDefaultAdmin}=require('../utils/defaultAdmin')
 const serviceRule=z.object({name:z.string().trim().min(1),type:z.enum(['SERVICE','PRODUCT']),category:z.string().trim().optional().default(''),defaultPrice:z.coerce.number().min(0).optional(),price:z.coerce.number().min(0).optional(),active:z.boolean().optional()}).transform(v=>({...v,price:v.price??v.defaultPrice,defaultPrice:v.defaultPrice??v.price})); const expenseRule=z.object({description:z.string().trim().min(1),amount:z.coerce.number().positive(),paymentMethod:z.enum(['CASH','MOMO']).default('CASH')}).transform(v=>({...v,date:new Date(),expenseDate:new Date()}))
 const crud=(Model,rule,label,owner=false,dateField='createdAt')=>({list:asyncHandler(async(req,res)=>res.json({success:true,data:await Model.find(dateFilter(req.query,dateField)).sort({[dateField]:-1,createdAt:-1}).populate('createdBy','name fullName phoneNumber')})),create:asyncHandler(async(req,res)=>{const p=rule.safeParse(req.body);if(!p.success)return res.status(400).json({success:false,message:'Validation failed',errors:p.error.issues});const data=await Model.create(owner?{...p.data,createdBy:req.user._id}:p.data);await data.populate('createdBy','name fullName phoneNumber');await log(req.user,`CREATE_${label}`,`Created ${label.toLowerCase()}`);res.status(201).json({success:true,data})}),update:asyncHandler(async(req,res)=>{const p=rule.safeParse(req.body);if(!p.success)return res.status(400).json({success:false,message:'Validation failed',errors:p.error.issues});const existing=await Model.findById(req.params.id);if(!existing)return res.status(404).json({success:false,message:`${label} not found`});if(owner&&String(existing.createdBy)!==String(req.user._id))return res.status(403).json({success:false,message:`You can only edit ${label.toLowerCase()} rows you personally created.`});const data=await Model.findByIdAndUpdate(existing._id,p.data,{returnDocument:'after'}).populate('createdBy','name fullName phoneNumber');res.json({success:true,data})}),remove:asyncHandler(async(req,res)=>{const existing=await Model.findById(req.params.id);if(!existing)return res.status(404).json({success:false,message:`${label} not found`});if(owner&&String(existing.createdBy)!==String(req.user._id))return res.status(403).json({success:false,message:`You can only delete ${label.toLowerCase()} rows you personally created.`});await Model.findByIdAndDelete(existing._id);res.json({success:true,message:`${label} deleted`})})})
 exports.services=crud(Service,serviceRule,'SERVICE');
@@ -11,13 +11,15 @@ const reverseImport = async (productId, quantity) => {
     { new: true },
   ))
 }
-const addImportedQuantity = async (productId, quantity) => {
+const addImportedQuantity = async (productId, quantity, session = null) => {
   if (!productId || !quantity) return true
-  return Boolean(await Product.findByIdAndUpdate(productId, { $inc: { quantity } }, { new: true }))
+  return Boolean(await Product.findByIdAndUpdate(productId, { $inc: { quantity } }, { new: true, session }))
 }
+const reportScope = (req, query = {}) => ['ADMIN', 'OWNER'].includes(req.user.role) ? query : { ...query, $or: [{ staff: req.user._id }, { createdBy: req.user._id }] }
+const expenseScope = (req, query = {}) => ['ADMIN', 'OWNER'].includes(req.user.role) ? query : { ...query, createdBy: req.user._id }
 exports.expenses={
- list:asyncHandler(async(req,res)=>{const query=dateFilter(req.query,'expenseDate');res.json({success:true,data:await Expense.find(query).sort({expenseDate:-1,createdAt:-1}).populate('createdBy','name fullName phoneNumber').populate('productId','name sku')})}),
- create:asyncHandler(async(req,res)=>{const p=importRule.safeParse(req.body);if(!p.success)return res.status(400).json({success:false,message:'Validation failed',errors:p.error.issues});const d=p.data,productId=d.productId||null;const product=productId?await Product.findById(productId):null;if(productId&&!product)return res.status(404).json({success:false,message:'Product not found'});if(productId&&!await addImportedQuantity(productId,d.stockQuantity))return res.status(404).json({success:false,message:'Product not found'});let data;try{data=await Expense.create({description:d.description,amount:d.amount,paymentMethod:d.paymentMethod,productId,stockQuantity:d.stockQuantity,createdBy:req.user._id})}catch(error){if(productId)await reverseImport(productId,d.stockQuantity);throw error}await log(req.user,'CREATE_EXPENSE','Imported stock');res.status(201).json({success:true,data})}),
+ list:asyncHandler(async(req,res)=>{const query=expenseScope(req,dateFilter(req.query,'expenseDate'));res.json({success:true,data:await Expense.find(query).sort({expenseDate:-1,createdAt:-1}).limit(1000).populate('createdBy','name fullName phoneNumber').populate('productId','name sku')})}),
+ create:asyncHandler(async(req,res)=>{const p=importRule.safeParse(req.body);if(!p.success)return res.status(400).json({success:false,message:'Validation failed',errors:p.error.issues});const d=p.data,productId=d.productId||null;let data;const session=await mongoose.startSession();try{await session.withTransaction(async()=>{const product=productId?await Product.findById(productId).session(session):null;if(productId&&!product)throw Object.assign(new Error('Product not found'),{status:404});if(productId&&!await addImportedQuantity(productId,d.stockQuantity,session))throw Object.assign(new Error('Product not found'),{status:404});[data]=await Expense.create([{description:d.description,amount:d.amount,paymentMethod:d.paymentMethod,productId,stockQuantity:d.stockQuantity,createdBy:req.user._id}],{session})})}finally{await session.endSession()}await log(req.user,'CREATE_EXPENSE','Imported stock');res.status(201).json({success:true,data})}),
  update:asyncHandler(async(req,res)=>{const p=importRule.safeParse(req.body);if(!p.success)return res.status(400).json({success:false,message:'Validation failed',errors:p.error.issues});const existing=await Expense.findById(req.params.id);if(!existing)return res.status(404).json({success:false,message:'EXPENSE not found'});if(String(existing.createdBy)!==String(req.user._id))return res.status(403).json({success:false,message:'You can only edit expense rows you personally created.'});const d=p.data,nextProductId=d.productId||null,nextProduct=nextProductId?await Product.findById(nextProductId):null;if(nextProductId&&!nextProduct)return res.status(404).json({success:false,message:'Product not found'});const oldProductId=existing.productId?String(existing.productId):null,sameProduct=oldProductId&&oldProductId===String(nextProductId||''),oldQuantity=Number(existing.stockQuantity||0),newQuantity=Number(d.stockQuantity||0);let reversed=false,added=false;const quantityToReverse=sameProduct?Math.max(0,oldQuantity-newQuantity):oldQuantity,quantityToAdd=sameProduct?Math.max(0,newQuantity-oldQuantity):newQuantity;if(oldProductId&&quantityToReverse){reversed=await reverseImport(oldProductId,quantityToReverse);if(!reversed)return res.status(409).json({success:false,message:'This import cannot be reversed because some of its stock has already been sold or removed.'})}try{if(nextProductId&&quantityToAdd){added=await addImportedQuantity(nextProductId,quantityToAdd);if(!added)throw Object.assign(new Error('Product not found'),{status:404})}const data=await Expense.findByIdAndUpdate(existing._id,{description:d.description,amount:d.amount,paymentMethod:d.paymentMethod,productId:nextProductId,stockQuantity:newQuantity},{new:true,runValidators:true});if(!data)throw Object.assign(new Error('Import record not found'),{status:404});res.json({success:true,data})}catch(error){if(added)await reverseImport(nextProductId,quantityToAdd);if(reversed)await addImportedQuantity(oldProductId,quantityToReverse);throw error}}),
  remove:asyncHandler(async(req,res)=>{const existing=await Expense.findOne({_id:req.params.id,});if(!existing)return res.status(404).json({success:false,message:'EXPENSE not found'});if(String(existing.createdBy)!==String(req.user._id))return res.status(403).json({success:false,message:'You can only delete expense rows you personally created.'});if(existing.productId&&!await reverseImport(existing.productId,existing.stockQuantity))return res.status(409).json({success:false,message:'This import cannot be reversed because some of its stock has already been sold or removed.'});try{await existing.deleteOne()}catch(error){if(existing.productId)await addImportedQuantity(existing.productId,existing.stockQuantity);throw error}res.json({success:true,message:'EXPENSE deleted'})})
 }
@@ -36,7 +38,7 @@ exports.dashboard=asyncHandler(async(req,res)=>{
  res.json({success:true,data})
 })
 exports.report=asyncHandler(async(req,res)=>{
-  const q=scope(req,dateFilter(req.query))
+ const q=reportScope(req,dateFilter(req.query))
   if(req.query.paymentMethod)q.paymentMethod=req.query.paymentMethod
   if(req.query.userId){
     if(!['ADMIN','OWNER'].includes(req.user.role))return res.status(403).json({success:false,message:'Only administrators can filter sales by user.'})
@@ -44,7 +46,7 @@ exports.report=asyncHandler(async(req,res)=>{
     q.$or=[{staff:req.query.userId},{createdBy:req.query.userId}]
   }
   const [transactions,total,bestSellingProducts,currentStock,salesByUser]=await Promise.all([
-    Transaction.find(q).populate('staff','name fullName phoneNumber role').populate('productId','name sku').sort({transactionDate:-1}),
+    Transaction.find(q).populate('staff','name fullName phoneNumber role').populate('productId','name sku').sort({transactionDate:-1}).limit(1000),
     Transaction.aggregate([{$match:q},{$group:{_id:null,amount:{$sum:'$paidAmount'},cashOut:{$sum:{$ifNull:['$cashOut',0]}},cashIn:{$sum:{$subtract:['$paidAmount',{$ifNull:['$cashOut',0]}]}},remaining:{$sum:'$remainingAmount'},cash:{$sum:{$cond:[{$eq:['$paymentMethod','CASH']},'$paidAmount',0]}},momo:{$sum:{$cond:[{$eq:['$paymentMethod','MOMO']},'$paidAmount',0]}},count:{$sum:1}}}]),
     Transaction.aggregate([{$match:{...q,productId:{$ne:null}}},{$group:{_id:'$productId',quantitySold:{$sum:'$quantity'},sales:{$sum:'$totalAmount'}}},{$sort:{quantitySold:-1}},{$limit:10},{$lookup:{from:'products',localField:'_id',foreignField:'_id',as:'product'}},{$unwind:'$product'},{$project:{_id:0,productId:'$_id',name:'$product.name',sku:'$product.sku',quantitySold:1,sales:1}}]),
     Product.aggregate([{$match:{}},{$group:{_id:null,value:{$sum:{$multiply:['$quantity','$costPrice']}}}}]),
@@ -56,10 +58,9 @@ exports.report=asyncHandler(async(req,res)=>{
 const userFields = z.object({
   name: z.string().trim().min(1), phoneNumber: z.string().trim().min(7),
   role: z.enum(['MANAGER', 'STAFF', 'CASHIER']).optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional(),
-  password: z.string().min(1).optional(),
+  password: z.string().min(8).max(128),
 })
 const userRule = z.object({ name: z.string().trim().min(1).optional(), phoneNumber: z.string().trim().min(7).optional(), role: z.enum(['MANAGER', 'STAFF', 'CASHIER']).optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional(), password: z.string().min(1).optional() })
-const DEFAULT_USER_PASSWORD = '123456'
 const safeUser = (user) => ({ id: user._id, _id: user._id, fullName: user.fullName, name: user.name, phoneNumber: user.phoneNumber, role: user.role, status: user.status, createdAt: user.createdAt })
 exports.users = {
   list: asyncHandler(async (req, res) => {
@@ -73,10 +74,10 @@ exports.users = {
     const bcrypt = require('bcryptjs')
     const name = parsed.data.name
     let data
-    try { data = await User.create({ fullName: name, name, phoneNumber: parsed.data.phoneNumber, passwordHash: await bcrypt.hash(DEFAULT_USER_PASSWORD, 12), role: parsed.data.role || 'STAFF', status: parsed.data.status || 'ACTIVE', createdBy: req.user._id }) }
+    try { data = await User.create({ fullName: name, name, phoneNumber: parsed.data.phoneNumber, passwordHash: await bcrypt.hash(parsed.data.password, 12), role: parsed.data.role || 'STAFF', status: parsed.data.status || 'ACTIVE', createdBy: req.user._id }) }
     catch (error) { if (error.code === 11000) return res.status(409).json({ success: false, message: 'An account with this phone number already exists.' }); throw error }
     await log(req.user, 'CREATE_USER', `Created ${data.role.toLowerCase()} ${data.name}`)
-    res.status(201).json({ success: true, data: { ...safeUser(data), defaultPassword: DEFAULT_USER_PASSWORD } })
+    res.status(201).json({ success: true, data: safeUser(data) })
   }),
   update: asyncHandler(async (req, res) => {
     const existing = await User.findById(req.params.id)

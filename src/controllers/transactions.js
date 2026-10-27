@@ -24,10 +24,10 @@ const batchRule = z.object({
   })).min(1).max(100),
 })
 
-const makeData = async (v, req) => {
+const makeData = async (v, req, session = null) => {
   let product = null
   if (v.productId) {
-    product = await Product.findById(v.productId)
+    product = await Product.findById(v.productId).session(session)
     if (!product || product.status !== 'ACTIVE') throw Object.assign(new Error('Select an active product'), { status: 400 })
   }
   const name = product?.name || v.productName || v.productOrService || v.serviceOrProduct
@@ -42,28 +42,29 @@ const makeData = async (v, req) => {
     paymentStatus: statusFor(totalAmount, v.paidAmount), notes: v.description || v.notes,
     saleDate: date, transactionDate: date }
 }
-const adjustStock = async (productId, amount) => {
+const adjustStock = async (productId, amount, session = null) => {
   if (!productId || !amount) return true
   if (amount < 0) {
-    const product = await Product.findOneAndUpdate({ _id: productId, status: 'ACTIVE', quantity: { $gte: -amount } }, { $inc: { quantity: amount } }, { new: true })
+    const product = await Product.findOneAndUpdate({ _id: productId, status: 'ACTIVE', quantity: { $gte: -amount } }, { $inc: { quantity: amount } }, { new: true, session })
     return Boolean(product)
   }
-  await Product.updateOne({ _id: productId }, { $inc: { quantity: amount } })
+  await Product.updateOne({ _id: productId }, { $inc: { quantity: amount } }, { session })
   return true
 }
-const shopScope = (_req, query = {}) => query
+const isAdmin = (user) => ['ADMIN', 'OWNER'].includes(user.role)
+const shopScope = (req, query = {}) => isAdmin(req.user) ? query : { ...query, $or: [{ staff: req.user._id }, { createdBy: req.user._id }] }
 const ownsTransaction = (req, row) => String(row?.createdBy || row?.staff || '') === String(req.user._id)
 
 exports.create = asyncHandler(async (req, res) => {
   const parsed = rule.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Validation failed', errors: parsed.error.issues })
-  const data = await makeData(parsed.data, req)
-  if (data.productId && !await adjustStock(data.productId, -data.quantity)) return res.status(409).json({ success: false, message: 'Not enough stock available for this sale' })
   let transaction
-  try { transaction = await Transaction.create({ ...data, staff: req.user._id, createdBy: req.user._id }) } catch (error) {
-    if (data.productId) await adjustStock(data.productId, data.quantity)
-    throw error
-  }
+  const session = await mongoose.startSession()
+  try { await session.withTransaction(async () => {
+    const data = await makeData(parsed.data, req, session)
+    if (data.productId && !await adjustStock(data.productId, -data.quantity, session)) throw Object.assign(new Error('Not enough stock available for this sale'), { status: 409 })
+    ;[transaction] = await Transaction.create([{ ...data, staff: req.user._id, createdBy: req.user._id }], { session })
+  }) } finally { await session.endSession() }
   await log(req.user, 'CREATE_TRANSACTION', `Created transaction for ${transaction.serviceOrProduct}`)
   res.status(201).json({ success: true, message: 'Transaction created successfully', data: transaction })
 })
@@ -72,21 +73,21 @@ exports.createBatch = asyncHandler(async (req, res) => {
   const parsed = batchRule.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Validation failed', errors: parsed.error.issues })
   const { customerName, paymentMethod, transactionDate, items } = parsed.data
-  const debited = []
   let created = []
+  const session = await mongoose.startSession()
   try {
-    const data = []
-    for (const item of items) {
-      const product = await Product.findById(item.productId)
+    await session.withTransaction(async () => {
+      const data = []
+      for (const item of items) {
+      const product = await Product.findById(item.productId).session(session)
       if (!product || product.status !== 'ACTIVE') throw Object.assign(new Error('One or more selected products are unavailable'), { status: 400 })
       const totalAmount = item.unitPrice * item.quantity
       const stock = await Product.findOneAndUpdate(
         { _id: product._id, status: 'ACTIVE', quantity: { $gte: item.quantity } },
         { $inc: { quantity: -item.quantity } },
-        { new: true },
+        { new: true, session },
       )
       if (!stock) throw Object.assign(new Error(`Not enough stock for ${product.name}`), { status: 409 })
-      debited.push({ productId: product._id, quantity: item.quantity })
       const costTotal = Number(product.costPrice || 0) * item.quantity
       const date = transactionDate || new Date()
       data.push({ customerName, productId: product._id, productOrService: product.name, serviceOrProduct: product.name,
@@ -94,27 +95,26 @@ exports.createBatch = asyncHandler(async (req, res) => {
         paidAmount: totalAmount, cashOut: costTotal, cashIn: totalAmount - costTotal,
         remainingAmount: 0, paymentMethod, paymentStatus: statusFor(totalAmount, totalAmount),
         saleDate: date, transactionDate: date, staff: req.user._id, createdBy: req.user._id })
-    }
-    for (const row of data) created.push(await Transaction.create(row))
-  } catch (error) {
-    if (created.length) await Transaction.deleteMany({ _id: { $in: created.map((row) => row._id) } })
-    for (const debit of debited) await Product.updateOne({ _id: debit.productId }, { $inc: { quantity: debit.quantity } })
-    throw error
-  }
+      }
+      created = await Transaction.create(data, { session })
+    })
+  } finally { await session.endSession() }
   await Promise.all(created.map((row) => log(req.user, 'CREATE_TRANSACTION', `Created transaction for ${row.serviceOrProduct}`)))
   res.status(201).json({ success: true, message: 'Sale recorded successfully', data: created })
 })
 
 exports.list = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 20, search, paymentMethod } = req.query
-  const query = shopScope(req, { ...dateFilter(req.query) })
-  if (req.query.dashboard === 'true' && !['ADMIN', 'OWNER'].includes(req.user.role)) {
-    query.$or = [{ staff: req.user._id }, { createdBy: req.user._id }]
-  }
+  const { search, paymentMethod } = req.query
+  const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1))
+  const limit = Math.max(1, Math.min(100, Number.parseInt(req.query.limit, 10) || 20))
+  let query = shopScope(req, { ...dateFilter(req.query) })
   if (paymentMethod) query.paymentMethod = paymentMethod
-  if (search) query.$or = [{ serviceOrProduct: new RegExp(search, 'i') }, { productOrService: new RegExp(search, 'i') }, { notes: new RegExp(search, 'i') }]
-  const [data, total] = await Promise.all([Transaction.find(query).sort({ transactionDate: -1, createdAt: -1 }).skip((page - 1) * limit).limit(Number(limit)).populate('staff', 'name fullName phoneNumber role').populate('productId', 'name sku category costPrice brand location unit description'), Transaction.countDocuments(query)])
-  res.json({ success: true, data, meta: { page: Number(page), limit: Number(limit), total, pages: Math.ceil(total / limit) } })
+  if (search) {
+    const terms = [{ serviceOrProduct: new RegExp(search, 'i') }, { productOrService: new RegExp(search, 'i') }, { notes: new RegExp(search, 'i') }]
+    query = query.$or ? { $and: [query, { $or: terms }] } : { ...query, $or: terms }
+  }
+  const [data, total] = await Promise.all([Transaction.find(query).sort({ transactionDate: -1, createdAt: -1 }).skip((page - 1) * limit).limit(limit).populate('staff', 'name fullName phoneNumber role').populate('productId', 'name sku category costPrice brand location unit description'), Transaction.countDocuments(query)])
+  res.json({ success: true, data, meta: { page, limit, total, pages: Math.ceil(total / limit) } })
 })
 exports.get = asyncHandler(async (req, res) => {
   const data = await Transaction.findOne(shopScope(req, { _id: req.params.id })).populate('staff', 'name fullName phoneNumber role').populate('productId', 'name sku category costPrice')
@@ -127,28 +127,28 @@ exports.update = asyncHandler(async (req, res) => {
   const existing = await Transaction.findOne(shopScope(req, { _id: req.params.id }))
   if (!existing) return res.status(404).json({ success: false, message: 'Transaction not found' })
   if (!ownsTransaction(req, existing)) return res.status(403).json({ success: false, message: 'You can only edit rows you personally created.' })
-  const data = await makeData(parsed.data, req)
-  if (existing.productId) await adjustStock(existing.productId, existing.quantity)
-  if (data.productId && !await adjustStock(data.productId, -data.quantity)) {
-    if (existing.productId) await adjustStock(existing.productId, -existing.quantity)
-    return res.status(409).json({ success: false, message: 'Not enough stock available for this sale' })
-  }
+  let updated
+  const session = await mongoose.startSession()
   try {
-    const updated = await Transaction.findByIdAndUpdate(existing._id, data, { new: true }).populate('staff', 'name fullName phoneNumber role').populate('productId', 'name sku category costPrice')
-    await log(req.user, 'UPDATE_TRANSACTION', `Updated transaction ${updated.serviceOrProduct}`)
-    res.json({ success: true, message: 'Transaction updated successfully', data: updated })
-  } catch (error) {
-    if (data.productId) await adjustStock(data.productId, data.quantity)
-    if (existing.productId) await adjustStock(existing.productId, -existing.quantity)
-    throw error
-  }
+    await session.withTransaction(async () => {
+      const data = await makeData(parsed.data, req, session)
+      if (existing.productId) await adjustStock(existing.productId, existing.quantity, session)
+      if (data.productId && !await adjustStock(data.productId, -data.quantity, session)) throw Object.assign(new Error('Not enough stock available for this sale'), { status: 409 })
+      updated = await Transaction.findByIdAndUpdate(existing._id, data, { new: true, session }).populate('staff', 'name fullName phoneNumber role').populate('productId', 'name sku category costPrice')
+    })
+  } finally { await session.endSession() }
+  await log(req.user, 'UPDATE_TRANSACTION', `Updated transaction ${updated.serviceOrProduct}`)
+  res.json({ success: true, message: 'Transaction updated successfully', data: updated })
 })
 exports.remove = asyncHandler(async (req, res) => {
   const existing = await Transaction.findOne(shopScope(req, { _id: req.params.id }))
   if (!existing) return res.status(404).json({ success: false, message: 'Transaction not found' })
   if (!ownsTransaction(req, existing)) return res.status(403).json({ success: false, message: 'You can only delete rows you personally created.' })
-  await Transaction.findByIdAndDelete(existing._id)
-  if (existing.productId) await adjustStock(existing.productId, existing.quantity)
+  const session = await mongoose.startSession()
+  try { await session.withTransaction(async () => {
+    await Transaction.findByIdAndDelete(existing._id, { session })
+    if (existing.productId) await adjustStock(existing.productId, existing.quantity, session)
+  }) } finally { await session.endSession() }
   await log(req.user, 'DELETE_TRANSACTION', `Deleted transaction ${existing.serviceOrProduct}`)
   res.json({ success: true, message: 'Transaction deleted' })
 })

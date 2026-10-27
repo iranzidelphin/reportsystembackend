@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken')
 const { z } = require('zod')
 const User = require('../models/User')
 const { asyncHandler, log } = require('../utils')
+const { jwtSecret } = require('../config/security')
 
 const safe = (user) => ({
   id: user._id,
@@ -40,8 +41,7 @@ exports.login = asyncHandler(async (req, res) => {
   await user.save()
   await log(user, 'LOGIN', `${user.name} logged in`)
 
-  const secret = process.env.JWT_SECRET || 'change_this_local_shop_report_secret'
-  const token = jwt.sign({ id: user._id, role: user.role }, secret, { expiresIn: process.env.JWT_EXPIRES_IN || '8h' })
+  const token = jwt.sign({ id: user._id, role: user.role }, jwtSecret(), { expiresIn: process.env.JWT_EXPIRES_IN || '8h' })
 
   res.json({ success: true, message: 'Login successful', data: { token, user: safe(user), permissions: user.role } })
 })

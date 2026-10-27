@@ -7,7 +7,8 @@
     "dev": "node --watch src/server.js",
     "start": "nodemon src/server.js",
     "seed": "node src/seed.js",
-    "migrate": "node src/migrations/001-products.js && node src/migrations/002-sync-receipts.js"
+    "migrate": "node src/migrations/001-products.js && node src/migrations/002-sync-receipts.js && node src/migrations/003-product-options.js",
+    "test": "node test/security.test.js"
   },
   "keywords": [],
   "author": "",
