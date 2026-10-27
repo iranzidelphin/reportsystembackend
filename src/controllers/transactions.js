@@ -104,11 +104,12 @@ exports.createBatch = asyncHandler(async (req, res) => {
 })
 
 exports.list = asyncHandler(async (req, res) => {
-  const { search, paymentMethod } = req.query
+  const { search, paymentMethod, productId } = req.query
   const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1))
-  const limit = Math.max(1, Math.min(100, Number.parseInt(req.query.limit, 10) || 20))
+  const limit = Math.max(1, Math.min(1000, Number.parseInt(req.query.limit, 10) || 20))
   let query = shopScope(req, { ...dateFilter(req.query) })
   if (paymentMethod) query.paymentMethod = paymentMethod
+  if (productId && mongoose.Types.ObjectId.isValid(productId)) query.productId = productId
   if (search) {
     const terms = [{ serviceOrProduct: new RegExp(search, 'i') }, { productOrService: new RegExp(search, 'i') }, { notes: new RegExp(search, 'i') }]
     query = query.$or ? { $and: [query, { $or: terms }] } : { ...query, $or: terms }
