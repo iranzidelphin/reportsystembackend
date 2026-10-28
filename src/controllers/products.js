@@ -130,7 +130,7 @@ exports.remove = asyncHandler(async (req, res) => {
   const product = await Product.findById(req.params.id)
   if (!product) return res.status(404).json({ success: false, message: 'Product not found' })
   const [sales, imports] = await Promise.all([Transaction.exists({ productId: product._id }), Expense.exists({ productId: product._id })])
-  if (sales || imports) return res.status(409).json({ success: false, message: 'This product has sales or import history. Set it to inactive instead.' })
+  if (sales || imports) return res.status(409).json({ success: false, message: 'Delete all sales and import records linked to this product before deleting it.' })
   await product.deleteOne()
   await log(req.user, 'DELETE_PRODUCT', `Deleted product ${product.name}`)
   res.json({ success: true, message: 'Product deleted' })
