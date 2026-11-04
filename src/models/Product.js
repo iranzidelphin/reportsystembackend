@@ -19,5 +19,7 @@ const schema = new Schema({
   lastUpdatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true })
 
+
+
 schema.index({ name: 'text', sku: 'text', brand: 'text', category: 'text' })
 module.exports = model('Product', schema)
