@@ -1,5 +1,6 @@
 const PDFDocument = require('pdfkit')
 const Transaction = require('../models/Transaction')
+const User = require('../models/User')
 const Expense = require('../models/Expense')
 const { asyncHandler, dateFilter, log } = require('../utils')
 
@@ -82,7 +83,19 @@ exports.salesPdf = asyncHandler(async (req, res) => {
   const totalRest = transactions.reduce((sum, item) => sum + item.remainingAmount, 0)
   const totalCash = transactions.reduce((sum, item) => sum + (item.paymentMethod === 'CASH' ? item.paidAmount : 0), 0)
   const totalMomo = transactions.reduce((sum, item) => sum + (item.paymentMethod === 'MOMO' ? item.paidAmount : 0), 0)
-  const doc = startPdf(res, 'sales-report.pdf', 'Sales report', req)
+  const reportUser = req.query.userId ? await User.findById(req.query.userId).select('name fullName') : null
+  const reportUserName = reportUser?.fullName || reportUser?.name || transactions[0]?.staff?.fullName || transactions[0]?.staff?.name
+  const doc = startPdf(res, 'sales-report.pdf', reportUserName ? `Sales report: ${reportUserName}` : 'Sales report', req)
+
+  if (reportUserName) {
+    const products = Object.values(transactions.reduce((all, item) => { const key = item.serviceOrProduct || item.productOrService || 'Product'; const row = all[key] ||= { product: key, qty: 0, revenue: 0, profit: 0 }; row.qty += Number(item.quantity || 1); row.revenue += Number(item.totalAmount ?? item.paidAmount ?? 0); row.profit += Number(item.totalAmount ?? item.paidAmount ?? 0) - Number(item.unitCost || 0) * Number(item.quantity || 1); return all }, {}))
+    summary(doc, [['Total sold', money(totalPaid)], ['Total earned', money(totalCashIn)], ['Sales', transactions.length]])
+    doc.fillColor('#27364c').fontSize(12).text('Products sold', 36, 177)
+    drawTable(doc, [{ key: 'product', label: 'Product', x: 44, width: 200 }, { key: 'qty', label: 'Qty', x: 250, width: 60, align: 'right' }, { key: 'revenue', label: 'Revenue', x: 330, width: 100, align: 'right' }, { key: 'profit', label: 'Profit', x: 450, width: 90, align: 'right' }], products.map((item) => ({ product: item.product, qty: item.qty, revenue: money(item.revenue), profit: money(item.profit) })))
+    doc.addPage(); doc.fillColor('#27364c').fontSize(12).text('Sales', 36, 104)
+    drawTable(doc, [{ key: 'date', label: 'Date', x: 44, width: 74 }, { key: 'product', label: 'Product', x: 125, width: 130 }, { key: 'customer', label: 'Customer', x: 262, width: 110 }, { key: 'method', label: 'Payment', x: 379, width: 70 }, { key: 'amount', label: 'Amount', x: 456, width: 84, align: 'right' }], transactions.map((item) => ({ date: new Date(item.transactionDate || item.saleDate).toLocaleDateString('en-GB'), product: item.serviceOrProduct || '-', customer: item.customerName || '-', method: item.paymentMethod === 'MOMO' ? 'MoMo Pay' : item.paymentMethod, amount: money(item.totalAmount ?? item.paidAmount) })))
+    doc.end(); await log(req.user, 'DOWNLOAD_SALES_REPORT', 'Downloaded sales PDF report'); return
+  }
 
   summary(doc, [['Amount', money(totalPaid)], ['Cash out', money(totalCashOut)], ['Cash in', money(totalCashIn)], ['Amount rest', money(totalRest)], ['Records', transactions.length]])
   drawTable(doc, [
